@@ -101,7 +101,27 @@ def load_or_explain(path: Path, *, require_api_key: bool = True,
         return load_config(path, require_api_key=require_api_key, require_videos=require_videos)
     except ConfigError as exc:
         _print_problems(f"{path.name} の内容を確認してください:", exc.problems)
+        print(f"読み込んだ設定ファイル: {path}")
+        print("  このファイルをメモ帳で開いて直し、「上書き保存」してください。")
+        for note in config_file_notes(path):
+            print(f"  注意: {note}")
+        print()
         return None
+
+
+def config_file_notes(path: Path) -> list[str]:
+    """編集したファイルと読み込まれるファイルが食い違う、よくある原因を調べる。"""
+    notes = []
+    for suffix in (".txt", ".json"):
+        twin = path.with_name(path.name + suffix)
+        if twin.exists():
+            notes.append(
+                f"同じフォルダーに「{twin.name}」があります。メモ帳で保存したときに名前の後ろに {suffix} が"
+                f"付いた可能性があります。プログラムが読むのは「{path.name}」だけです"
+            )
+    if path.with_name("config.example.json").exists() and path.name == "config.json":
+        notes.append("config.example.json（ひな形）を書き換えても読み込まれません。書き換えるのは config.json です")
+    return notes
 
 
 def run_check(config: AppConfig) -> int:

@@ -100,3 +100,15 @@ def test_log_formatter_hides_api_key():
     fmt = main_module.RedactingFormatter("%(message)s", [FAKE_KEY])
     record = logging.LogRecord("x", logging.ERROR, __file__, 1, f"url?key={FAKE_KEY}", None, None)
     assert FAKE_KEY not in fmt.format(record) and "***" in fmt.format(record)
+
+
+def test_config_error_shows_file_path_and_txt_twin(tmp_path, capsys):
+    path = write_config(tmp_path, videos=[{"url": "https://youtu.be/YYYYYYYYYYY", "name": "仮"}])
+    (tmp_path / "config.json.txt").write_text("{}", encoding="utf-8")
+    (tmp_path / "config.example.json").write_text("{}", encoding="utf-8")
+    assert main_module.main(["--config", str(path)]) == 1
+    out = capsys.readouterr().out
+    assert "https://youtu.be/YYYYYYYYYYY" in out          # どの URL が残っているか
+    assert f"読み込んだ設定ファイル: {path}" in out          # どのファイルを読んだか
+    assert "config.json.txt" in out                      # メモ帳の .txt 付き保存の可能性
+    assert "config.example.json（ひな形）を書き換えても読み込まれません" in out

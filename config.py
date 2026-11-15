@@ -291,7 +291,8 @@ def parse_config(data: Any, *, base_dir: Path = PROJECT_DIR, path: Path | None =
             continue
         if video_id in _PLACEHOLDER_VIDEO_IDS:
             c.errors.append(
-                f"videos の {index} 番目はひな形の仮の URL のままです。監視したい動画の URL に書き換えてください"
+                f"videos の {index} 番目はひな形の仮の URL（{str(ref).strip()}）のままです。"
+                "監視したい動画の URL に書き換えて、上書き保存してください"
             )
             continue
         if video_id in seen:
