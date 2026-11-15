@@ -152,3 +152,32 @@ def test_dashboard_loader_never_fails(tmp_path):
     good.write_text(json.dumps({"videos": [VID_A]}), encoding="utf-8")
     cfg, messages = C.load_config_for_dashboard(good)
     assert cfg.videos[0].video_id == VID_A and not messages
+
+
+def test_goal_settings(tmp_path):
+    cfg = parse(base(videos=[
+        {"url": VID_A, "goal": [2000000, 1000000, 1000000]},
+        {"url": VID_B, "goal": 500, "goal_play": False,
+         "goal_play_url": f"https://youtu.be/{VID_A}?si=share"},
+    ]), tmp_path)
+    a, b = cfg.videos
+    assert a.goals == (1000000, 2000000) and a.goal_play
+    assert a.goal_url() == f"https://www.youtube.com/watch?v={VID_A}"   # 省略時はこの動画
+    assert b.goals == (500,) and not b.goal_play
+    assert b.goal_url() == f"https://www.youtube.com/watch?v={VID_A}"   # 別の動画も指定できる
+    assert parse(base(), tmp_path).videos[0].goals == ()
+
+
+@pytest.mark.parametrize("goal", ["1,000,000", 0, -5, True, [], [100, "x"], 1.5])
+def test_invalid_goal(tmp_path, goal):
+    with pytest.raises(C.ConfigError) as exc:
+        parse(base(videos=[{"url": VID_A, "goal": goal}]), tmp_path)
+    assert "goal（目標再生数）" in str(exc.value)
+
+
+def test_goal_play_url_must_be_youtube_video(tmp_path):
+    for bad in ["https://example.com/watch?v=dQw4w9WgXcQ", "C:\\Windows\\notepad.exe",
+                "https://www.youtube.com/@channel"]:
+        with pytest.raises(C.ConfigError) as exc:
+            parse(base(videos=[{"url": VID_A, "goal": 10, "goal_play_url": bad}]), tmp_path)
+        assert "goal_play_url" in str(exc.value)

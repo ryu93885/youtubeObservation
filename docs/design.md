@@ -1,6 +1,6 @@
 # 設計メモ（YouTube View Monitor）
 
-最終更新: 2026-11-15
+最終更新: 2026-11-15（目標再生数で MV を再生する機能を追加）
 
 ## 1. 第 1 段階の調査結果（開発開始時点）
 
@@ -33,7 +33,7 @@
 | `monitor.py` | 通知条件の判定（急増・節目・クールダウン・まとめ通知）と、監視ループ（時刻そろえ・クォータ待ち・設定の再読み込み・保存期間の管理・状態ファイル） |
 | `analytics.py` | 増加数・増加速度・時間帯別増加数・速度比較・欠損と減少の検出。**通知とダッシュボードの共通ロジック** |
 | `youtube_api.py` | URL の解析、videos.list の呼び出し（50 件ずつ）、再試行、エラーの分類 |
-| `notifier.py` | Windows トースト通知（失敗時はコンソール / ログ） |
+| `notifier.py` | Windows トースト通知（失敗時はコンソール / ログ）と、目標到達時の動画の再生（既定のブラウザで YouTube の動画ページだけを開く） |
 | `data_manager.py` | CSV / JSON の安全な読み書き、保存期間による削除 |
 | `config.py` | 設定の読み込み・検証・既定値 |
 | `instance_lock.py` | OS のファイルロックによる二重起動防止 |
@@ -76,8 +76,15 @@
 - **急増（surge）**: `increase_over(window_minutes)` が `threshold` 以上。今回の取得で値が得られた動画だけを判定する（古いデータでは判定しない）。
 - **クールダウン**: 同じ動画の急増通知は `cooldown_minutes` あける。基準は前回通知の時刻。
 - **節目（milestone）**: 前回と今回の取得の間で `milestone_step` の倍数を超えたら、超えた最大の節目を 1 回だけ通知する。監視開始時点ですでに超えている節目は通知しない。
+- **目標達成（goal）**: 前回の取得 < 目標 ≤ 今回の取得 になったら、通知して `goal_url()` をブラウザで開く。
+  - 同じ目標（またはそれ以上の目標）を処理済みなら反応しない。1 回で複数の目標を越えたら最大の目標だけ。
+  - 監視開始時点ですでに越えている目標は再生しない（警告を 1 回だけ出す）。
+  - `notification.enabled` が false でも判定・再生する（通知だけ出さない）。`goal_play: false` なら再生しない。
+  - まとめ通知の対象にせず、1 件ずつ通知する。同じ回に同じ URL を何度も開かない。
+  - 開ける URL は `https://www.youtube.com/watch?v=` + 動画 ID の形だけ（`config.py` で正規化し、`notifier.play_video` でも確認する）。
+  - 到達予想（ダッシュボードの進み具合）は `analytics.time_to_goal`（過去 24 時間平均の速度、なければ直近 1 時間）。
 - **まとめ通知**: 1 回の取得で `max_per_cycle` 件を超えたら 1 件にまとめる（記録は個別に残す）。
-- **再起動後の引き継ぎ**: `notifications.csv` から、動画ごとの最後の急増通知の時刻と通知済みの節目を復元する（`NotificationLedger`）。状態ファイルを別に持たないので、記録と状態が食い違わない。
+- **再起動後の引き継ぎ**: `notifications.csv` から、動画ごとの最後の急増通知の時刻と通知済みの節目・目標を復元する（`NotificationLedger`）。状態ファイルを別に持たないので、記録と状態が食い違わない。
 - 通知の表示に失敗しても記録は残す（`delivered=false`）。同じ条件で何度も再送はしない。
 
 ## 5. データ形式
@@ -100,7 +107,8 @@ timestamp,video_id,view_count,like_count,comment_count
 
 ### notifications.csv
 
-`timestamp, video_id, kind(surge|milestone), window_minutes, increase, threshold, view_count, milestone, delivered, message`
+`timestamp, video_id, kind(surge|milestone|goal), window_minutes, increase, threshold, view_count, milestone, delivered, message`
+（goal の行は `milestone` 列に目標再生数を入れる）
 
 ### status.json（監視プログラム → ダッシュボード）
 

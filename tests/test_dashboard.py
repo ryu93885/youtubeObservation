@@ -119,3 +119,18 @@ def test_dashboard_right_after_monitoring_starts(monkeypatch, tmp_path, samples)
     values = {m.label: m.value for m in at.metric}
     assert values["過去1時間の増加数"] == "データ不足"
     assert any("1時間分のデータがそろうと表示されます" in i.value for i in at.info)
+
+
+def test_goal_progress_is_shown(monkeypatch, tmp_path):
+    cfg_path = make_real_data(tmp_path)
+    data = json.loads(cfg_path.read_text(encoding="utf-8"))
+    data["videos"][0]["goal"] = 20_000  # 現在 12,160 回
+    cfg_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    at = run_app(monkeypatch, "--config", str(cfg_path))
+    texts = [p.proto.text for p in at.get("progress")]
+    assert any("目標 20,000回まで あと 7,840回" in t and "ごろ到達" in t for t in texts), texts
+
+
+def test_demo_shows_goal_progress(monkeypatch):
+    at = run_app(monkeypatch, "--demo")
+    assert any("目標 800,000回まで" in p.proto.text for p in at.get("progress"))

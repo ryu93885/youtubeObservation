@@ -182,6 +182,30 @@ class FallbackNotifier(Notifier):
         return False
 
 
+_WATCH_URL = re.compile(r"^https://www\.youtube\.com/watch\?v=[A-Za-z0-9_-]{11}$")
+
+
+def play_video(url: str) -> bool:
+    """既定のブラウザで YouTube の動画を開く（YouTube の動画ページは開くと再生が始まる）。
+
+    安全のため、https://www.youtube.com/watch?v=（11 文字の動画 ID）の形の URL だけを開く。
+    ブラウザの自動再生の設定によっては、音声付きで自動再生されないことがある。
+    """
+    if not _WATCH_URL.fullmatch(url or ""):
+        logger.warning("YouTube の動画 URL ではないため開きません: %s", url)
+        return False
+    import webbrowser
+
+    try:
+        opened = webbrowser.open(url, new=2)  # 新しいタブで開く
+    except Exception as exc:  # ブラウザが見つからない環境など
+        logger.warning("ブラウザで動画を開けませんでした: %s", exc)
+        return False
+    if not opened:
+        logger.warning("ブラウザで動画を開けませんでした（既定のブラウザが見つかりません）")
+    return bool(opened)
+
+
 def create_notifier(app_id: str = "YouTubeViewMonitor", *, sound: bool = True,
                     platform: str | None = None) -> Notifier:
     platform = platform or sys.platform

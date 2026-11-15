@@ -112,3 +112,31 @@ def test_config_error_shows_file_path_and_txt_twin(tmp_path, capsys):
     assert f"読み込んだ設定ファイル: {path}" in out          # どのファイルを読んだか
     assert "config.json.txt" in out                      # メモ帳の .txt 付き保存の可能性
     assert "config.example.json（ひな形）を書き換えても読み込まれません" in out
+
+
+def test_test_play_opens_goal_video_without_api_key(tmp_path, monkeypatch, capsys):
+    opened = []
+    monkeypatch.setattr(main_module, "play_video", lambda url: opened.append(url) or True)
+    path = write_config(tmp_path, api_key="", videos=[
+        {"url": VID_A, "name": "HANABI", "goal": 1000, "goal_play_url": "https://youtu.be/abcdefghijk"}])
+    assert main_module.main(["--config", str(path), "--test-play"]) == 0
+    assert opened == ["https://www.youtube.com/watch?v=abcdefghijk"]
+
+
+def test_check_shows_goal_progress(tmp_path, monkeypatch, capsys):
+    clock = Clock()
+    fake = FakeClient(clock, {VID_A: 990_000})
+
+    class FakeYouTube:
+        def __init__(self, key, **kwargs):
+            pass
+
+        def fetch_videos(self, ids):
+            return fake.fetch_videos(ids)
+
+    monkeypatch.setattr(main_module, "YouTubeClient", FakeYouTube)
+    path = write_config(tmp_path, videos=[{"url": VID_A, "name": "HANABI", "goal": [500_000, 1_000_000]}])
+    assert main_module.main(["--config", str(path), "--check"]) == 0
+    out = capsys.readouterr().out
+    assert "目標 1,000,000回まで あと 10,000回" in out
+    assert "目標 500,000回 はすでに超えています" in out

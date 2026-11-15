@@ -272,3 +272,100 @@ def test_unexpected_error_does_not_stop_the_loop(tmp_path, clock):
     svc.run_forever(max_cycles=3)
     assert client.calls == 3  # 例外が起きても次の回に進む
     assert json.loads(svc.paths.status.read_text(encoding="utf-8"))["state"] == "stopped"
+
+
+# ---------------------------------------------------------------- 目標再生数
+def goal_video(goals=(1000,), play=True, url=""):
+    return VideoConfig(VID_A, VID_A, "推し", goals=tuple(goals), goal_play=play, goal_play_url=url)
+
+
+def test_evaluate_goal_crossing_once():
+    ledger = M.NotificationLedger()
+    v = goal_video((1000, 2000))
+    assert M.evaluate_goal(series([0, 5], [900, 990]), v, ledger) is None
+    alert = M.evaluate_goal(series([0, 5], [990, 1003]), v, ledger)
+    assert alert.kind == "goal" and alert.milestone == 1000
+    ledger.remember(alert)
+    # 一度減ってまた超えても、同じ目標では反応しない
+    assert M.evaluate_goal(series([0, 5, 10], [1003, 998, 1005]), v, ledger) is None
+    # 2 つの目標を一度に飛び越えたら、大きいほうの 1 回だけ
+    jump = M.evaluate_goal(series([0, 5], [900, 2500]), v, M.NotificationLedger())
+    assert jump.milestone == 2000
+
+
+def test_goal_already_passed_at_start_does_not_trigger():
+    v = goal_video((1000,))
+    assert M.evaluate_goal(series([0], [5000]), v, M.NotificationLedger()) is None
+    assert M.evaluate_goal(series([0, 5], [5000, 5100]), v, M.NotificationLedger()) is None
+
+
+def goal_service(tmp_path, clock, played, **overrides):
+    data = {"videos": [{"url": VID_A, "name": "HANABI", "goal": 10_300}]}
+    data.update(overrides)
+    cfg = make_config(tmp_path, **data)
+    client = FakeClient(clock, {VID_A: 10_000}, step={VID_A: 60})
+    notifier = RecordingNotifier()
+    svc = M.MonitorService(cfg, client=client, notifier=notifier, clock=clock, sleep=lambda s: None,
+                           player=lambda url: played.append(url) or True)
+    svc.startup()
+    return svc, client, notifier
+
+
+def test_goal_reached_plays_video_once_and_survives_restart(tmp_path, clock):
+    played = []
+    svc, client, notifier = goal_service(tmp_path, clock, played)
+    run(svc, clock, 8)  # 10,060 → 10,480（5 回目で 10,300 を超える）
+    assert played == [f"https://www.youtube.com/watch?v={VID_A}"]
+    goal_msgs = [m for m in notifier.sent if "目標達成" in m.title]
+    assert len(goal_msgs) == 1 and "10,300回" in goal_msgs[0].body
+    notes = read_notifications_csv(svc.paths.notifications)
+    goal_rows = notes[notes["kind"] == "goal"]
+    assert list(goal_rows["milestone"]) == [10300] and "動画を再生しました" in goal_rows["message"].iloc[0]
+    # 再起動しても、同じ目標で再生し直さない
+    played2 = []
+    svc2, _, _ = goal_service(tmp_path, clock, played2)
+    svc2.client = client
+    run(svc2, clock, 3)
+    assert played2 == []
+
+
+def test_goal_plays_even_when_notifications_are_off(tmp_path, clock):
+    played = []
+    svc, _, notifier = goal_service(tmp_path, clock, played, notification={"enabled": False})
+    run(svc, clock, 8)
+    assert len(played) == 1 and notifier.sent == []
+
+
+def test_goal_play_false_only_notifies(tmp_path, clock):
+    played = []
+    svc, _, notifier = goal_service(
+        tmp_path, clock, played, videos=[{"url": VID_A, "goal": 10_300, "goal_play": False}])
+    run(svc, clock, 8)
+    assert played == [] and any("目標達成" in m.title for m in notifier.sent)
+
+
+def test_same_play_url_is_opened_once_per_cycle(tmp_path, clock):
+    played = []
+    mv = f"https://youtu.be/{VID_A}"
+    svc, client, _ = goal_service(tmp_path, clock, played, videos=[
+        {"url": VID_A, "goal": 10_300},
+        {"url": VID_B, "goal": 1_000, "goal_play_url": mv},
+    ])
+    client.views[VID_B] = 940
+    client.step[VID_B] = 12
+    run(svc, clock, 8)
+    assert played == [f"https://www.youtube.com/watch?v={VID_A}"]
+
+
+def test_passed_goal_is_reported_once(tmp_path, clock, caplog):
+    played = []
+    svc, _, _ = goal_service(tmp_path, clock, played, videos=[{"url": VID_A, "goal": 5_000}])
+    with caplog.at_level("WARNING"):
+        run(svc, clock, 3)
+    assert played == []
+    assert caplog.text.count("すでに超えています") == 1
+
+
+def test_summary_mentions_goal(tmp_path):
+    cfg = make_config(tmp_path, videos=[{"url": VID_A, "name": "HANABI", "goal": [1000000, 2000000]}])
+    assert "目標 1,000,000・2,000,000回で通知して動画を再生" in "\n".join(M.summarize_targets(cfg))

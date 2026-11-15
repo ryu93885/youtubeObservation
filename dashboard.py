@@ -288,6 +288,7 @@ def fig_views(ctx: Context, series: pd.DataFrame, notes: pd.DataFrame, title: st
     if not notes.empty:
         n = notes.assign(time=to_local(notes["timestamp"], ctx.tz))
         labels = [("節目 " + f"{int(m):,}回") if k == "milestone" and pd.notna(m) else
+                  ("目標 " + f"{int(m):,}回 達成") if k == "goal" and pd.notna(m) else
                   (f"+{int(i):,}回 / {int(w)}分" if pd.notna(i) and pd.notna(w) else "通知")
                   for k, m, i, w in zip(n["kind"], n["milestone"], n["increase"], n["window_minutes"])]
         fig.add_trace(go.Scatter(x=n["time"], y=n["view_count"], mode="markers", name="通知した時点",
@@ -529,6 +530,7 @@ def render_detail(ctx: Context, start: pd.Timestamp | None, end: pd.Timestamp) -
                f"（1分あたり {fmt_rate(cmp_.recent.per_minute, '分')}）")
     if info["last_ts"] is not None and ctx.now - info["last_ts"] > gap_limit(ctx) and not ctx.demo:
         st.warning("この動画の最新データは古くなっています。増加数は最後に取得した時点までの値です。")
+    render_goal(ctx, video_id, info["views"], info["last_ts"], inc24, cmp_)
 
     # グラフ 1: 視聴回数の推移
     shown = clip(series, start, end)
@@ -604,6 +606,38 @@ def render_detail(ctx: Context, start: pd.Timestamp | None, end: pd.Timestamp) -
                        .rename(columns={"increase": "直前1時間の増加数", "per_hour": "1時間あたり"}).iloc[::-1])
     else:
         st.info("1時間あたりの増加数は、1時間分のデータがそろうと表示されます。")
+
+
+def goal_values(ctx: Context, video_id: str) -> tuple[int, ...]:
+    if ctx.demo:
+        goal = DEMO_VIDEOS.get(video_id, {}).get("goal")
+        return (int(goal),) if goal else ()
+    video = ctx.config.video(video_id)
+    return video.goals if video else ()
+
+
+def render_goal(ctx: Context, video_id: str, views: int | None, last_ts, inc24: A.Increase,
+                cmp_: A.SpeedComparison) -> None:
+    """目標再生数までの進み具合と、今のペースでの到達予想。"""
+    goals = goal_values(ctx, video_id)
+    if not goals or views is None:
+        return
+    goal = A.next_goal(views, goals)
+    if goal is None:
+        st.success(f"🎯 目標 {max(goals):,}回 を達成しています（現在 {views:,}回）")
+        return
+    # 速度は過去 24 時間の平均を優先し、なければ直近 1 時間を使う
+    rate = inc24.per_hour if inc24.ok else cmp_.recent.per_hour
+    eta = A.time_to_goal(views, goal, rate)
+    if eta is not None:
+        when = fmt_time(last_ts + eta, ctx.tz) if last_ts is not None else "-"
+        eta_text = f"今のペース（{fmt_rate(rate)}）だと約{A.format_duration(eta)}後、{when}ごろ到達"
+    elif rate is None:
+        eta_text = "到達予想は、増加速度を計算できるだけのデータがそろうと表示されます"
+    else:
+        eta_text = "今のペースでは増えていないため、到達時刻を予想できません"
+    st.progress(min(views / goal, 1.0),
+                text=f"🎯 目標 {goal:,}回まで あと {goal - views:,}回（{views / goal:.1%}）　{eta_text}")
 
 
 def assign_colors(selected: list[str], order: list[str], palette: list[str]) -> dict[str, str]:
@@ -688,7 +722,7 @@ def render_notifications(ctx: Context) -> None:
         st.info("まだ通知は送られていません。")
         return
     df = notes.iloc[::-1]
-    kinds = {"surge": "急な伸び", "milestone": "節目の突破"}
+    kinds = {"surge": "急な伸び", "milestone": "節目の突破", "goal": "目標達成"}
     st.dataframe(pd.DataFrame({
         "日時": to_local(df["timestamp"], ctx.tz),
         "動画": [ctx.name(v) for v in df["video_id"]],
@@ -696,9 +730,10 @@ def render_notifications(ctx: Context) -> None:
         "増加数": [fmt_int(v, sign=True) if pd.notna(v) else "" for v in df["increase"]],
         "判定期間": [f"{int(w)}分" if pd.notna(w) else "" for w in df["window_minutes"]],
         "閾値": [fmt_int(v) if pd.notna(v) else "" for v in df["threshold"]],
-        "節目": [fmt_int(v) if pd.notna(v) else "" for v in df["milestone"]],
+        "節目・目標": [fmt_int(v) if pd.notna(v) else "" for v in df["milestone"]],
         "その時の視聴回数": [fmt_int(v) for v in df["view_count"]],
         "表示": ["表示した" if d else "表示できず（ログ参照）" for d in df["delivered"]],
+        "内容": list(df["message"].astype(str)),
     }), hide_index=True)
 
 

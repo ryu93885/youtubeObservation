@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from youtube_api import InvalidVideoReference, extract_video_id
+from youtube_api import InvalidVideoReference, extract_video_id, video_url
 
 PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = PROJECT_DIR / "config.json"
@@ -78,9 +78,16 @@ class VideoConfig:
     enabled: bool = True
     notify: bool = True
     rule: NotificationRule = field(default_factory=NotificationRule)
+    goals: tuple[int, ...] = ()   # 目標再生数（小さい順）。到達したら通知して動画を再生する
+    goal_play: bool = True        # 目標に到達したときにブラウザで再生するか
+    goal_play_url: str = ""       # 再生する動画（空ならこの動画）。YouTube の動画 URL に限る
 
     def display_name(self) -> str:
         return self.name or self.video_id
+
+    def goal_url(self) -> str:
+        """目標到達時に再生する動画の URL（https://www.youtube.com/watch?v=… の形）。"""
+        return self.goal_play_url or video_url(self.video_id)
 
 
 @dataclass(frozen=True)
@@ -177,7 +184,24 @@ _NOTIFY_KEYS = {"enabled", "window_minutes", "threshold", "cooldown_minutes", "m
                 "max_per_cycle", "sound", "app_id"}
 _DASH_KEYS = {"refresh_seconds", "default_period_hours", "url"}
 _VIDEO_KEYS = {"url", "id", "name", "enabled", "notify", "window_minutes", "threshold",
-               "cooldown_minutes", "milestone_step"}
+               "cooldown_minutes", "milestone_step", "goal", "goal_play", "goal_play_url"}
+
+
+def _parse_goals(value: Any, path: str, c: _Checker) -> tuple[int, ...]:
+    """goal（目標再生数）を読む。1 つの数でも、数の一覧（例: [1000000, 2000000]）でもよい。"""
+    if value is None:
+        return ()
+    values = value if isinstance(value, list) else [value]
+    ok = bool(values) and all(
+        isinstance(v, int) and not isinstance(v, bool) and v >= 1 for v in values
+    )
+    if not ok:
+        c.errors.append(
+            f"{path}goal（目標再生数）は 1 以上の整数か、整数の一覧（例: [1000000, 2000000]）で指定してください。"
+            f"カンマや \" \" を付けずに 1000000 のように書きます。現在の値: {value!r}"
+        )
+        return ()
+    return tuple(sorted(set(values)))
 
 
 def _resolve_path(value: str, base: Path) -> Path:
@@ -305,6 +329,15 @@ def parse_config(data: Any, *, base_dir: Path = PROJECT_DIR, path: Path | None =
             cooldown_minutes=c.integer(raw, "cooldown_minutes", default_rule.cooldown_minutes, "通知クールダウン（分）", minimum=0, path=vp),
             milestone_step=c.integer(raw, "milestone_step", default_rule.milestone_step, "節目通知の間隔（回）", minimum=0, path=vp),
         )
+        goals = _parse_goals(raw.get("goal"), vp, c)
+        goal_play_url = ""
+        goal_ref = c.string(raw, "goal_play_url", "", "目標到達時に再生する動画", path=vp)
+        if goal_ref:
+            try:
+                # 再生できるのは YouTube の動画だけ（任意のサイトやファイルは開かない）
+                goal_play_url = video_url(extract_video_id(goal_ref))
+            except InvalidVideoReference as exc:
+                c.errors.append(f"{vp}goal_play_url（目標到達時に再生する動画）: {exc}")
         videos.append(VideoConfig(
             video_id=video_id,
             url=str(ref).strip(),
@@ -312,6 +345,9 @@ def parse_config(data: Any, *, base_dir: Path = PROJECT_DIR, path: Path | None =
             enabled=c.boolean(raw, "enabled", True, "監視するか", path=vp),
             notify=c.boolean(raw, "notify", True, "通知するか", path=vp),
             rule=rule,
+            goals=goals,
+            goal_play=c.boolean(raw, "goal_play", True, "目標到達時に再生するか", path=vp),
+            goal_play_url=goal_play_url,
         ))
     video_errors = any(e.startswith("videos") for e in c.errors)
     if require_videos and not any(v.enabled for v in videos) and not video_errors:

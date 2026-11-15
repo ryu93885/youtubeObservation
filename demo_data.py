@@ -20,7 +20,7 @@ import analytics
 
 DEMO_VIDEOS = {
     "demoVideo01": {"name": "新曲MV（デモ）", "title": "【MV】新曲 Official Music Video",
-                    "channel_title": "デモチャンネルA", "threshold": 10000},
+                    "channel_title": "デモチャンネルA", "threshold": 10000, "goal": 800000},
     "demoVideo02": {"name": "ライブ配信アーカイブ（デモ）", "title": "【歌枠】3周年記念ライブ",
                     "channel_title": "デモチャンネルA", "threshold": 1000},
     "demoVideo03": {"name": "歌ってみた（デモ）", "title": "【歌ってみた】カバー曲",

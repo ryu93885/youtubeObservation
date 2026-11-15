@@ -28,7 +28,8 @@
       "url": "https://youtu.be/YYYYYYYYYYY",
       "name": "ライブ配信のアーカイブ",
       "threshold": 500,
-      "milestone_step": 100000
+      "milestone_step": 100000,
+      "goal": 10000000
     }
   ]
 }

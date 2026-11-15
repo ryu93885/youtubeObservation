@@ -360,6 +360,24 @@ def speed_profile(series: pd.DataFrame, *, interval: pd.Timedelta | float | None
     return pd.DataFrame(rows)
 
 
+# ---------------------------------------------------------------------- 目標再生数
+def next_goal(current: int, goals: Sequence[int]) -> int | None:
+    """まだ到達していない、いちばん近い目標再生数（すべて到達済みなら None）。"""
+    return next((g for g in sorted(goals) if g > current), None)
+
+
+def time_to_goal(current: int, goal: int, per_hour: float | None) -> pd.Timedelta | None:
+    """今の速度（1 時間あたりの増加数）のままなら、目標まであとどのくらいかかるか。
+
+    すでに到達していれば 0、速度が分からない・増えていない（0 以下）なら None。
+    """
+    if current >= goal:
+        return pd.Timedelta(0)
+    if per_hour is None or pd.isna(per_hour) or per_hour <= 0:
+        return None
+    return pd.Timedelta(hours=(goal - current) / per_hour)
+
+
 # ---------------------------------------------------------------------- データの品質
 def find_gaps(series: pd.DataFrame, expected_interval: pd.Timedelta | float) -> pd.DataFrame:
     """取得間隔が想定の 2 倍 + 1 分を超えて空いた箇所（停止・通信障害など）。"""

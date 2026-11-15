@@ -3,10 +3,11 @@
 通知の種類:
     surge      直近 window_minutes 分の増加数が threshold 以上（増加数の計算は analytics と共通）
     milestone  視聴回数が milestone_step の倍数（例: 10 万回ごと）を超えた
+    goal       視聴回数が目標再生数（goal）に到達した → 通知し、ブラウザで MV を再生する
 
 通知の連発を防ぐしくみ:
     - 同じ動画の surge 通知は cooldown_minutes 分あける
-    - 同じ節目（例: 100 万回）の通知は 1 回だけ
+    - 同じ節目（例: 100 万回）の通知・同じ目標の再生は 1 回だけ
     - 1 回の取得で max_per_cycle 件を超えるときは 1 件のまとめ通知にする
     - 送った通知は notifications.csv に記録し、再起動後もクールダウンを引き継ぐ
 """
@@ -38,7 +39,7 @@ from data_manager import (
     utc_now,
     write_json_atomic,
 )
-from notifier import Message, Notifier, create_notifier
+from notifier import Message, Notifier, create_notifier, play_video
 from youtube_api import (
     AuthError,
     FetchResult,
@@ -58,7 +59,7 @@ PACIFIC = ZoneInfo("America/Los_Angeles")  # YouTube API のクォータは太�
 # ---------------------------------------------------------------------- 通知の判定
 @dataclass(frozen=True)
 class Alert:
-    kind: str  # "surge" | "milestone"
+    kind: str  # "surge" | "milestone" | "goal"
     video_id: str
     name: str
     timestamp: pd.Timestamp
@@ -83,6 +84,9 @@ class Alert:
         if self.kind == "milestone":
             title = f"🎉 {self.milestone:,}回 突破: {self.name}"
             body = f"現在 {self.view_count:,}回"
+        elif self.kind == "goal":
+            title = f"🎯 目標達成: {self.name}"
+            body = f"目標の {self.milestone:,}回に到達しました！\n現在 {self.view_count:,}回"
         else:
             title = f"📈 再生数が伸びています: {self.name}"
             body = (f"直近{_minutes_label(self.window_minutes)}で +{self.increase:,}回{self._span_note()}"
@@ -93,6 +97,8 @@ class Alert:
     def summary(self) -> str:
         if self.kind == "milestone":
             return f"{self.name}: {self.milestone:,}回突破"
+        if self.kind == "goal":
+            return f"{self.name}: 目標 {self.milestone:,}回達成"
         return f"{self.name}: +{self.increase:,}回/{_minutes_label(self.window_minutes)}"
 
     def record(self, delivered: bool, message: str) -> dict:
@@ -124,6 +130,7 @@ class NotificationLedger:
     def __init__(self, records: pd.DataFrame | None = None) -> None:
         self.last_surge: dict[str, pd.Timestamp] = {}
         self.milestones: dict[str, set[int]] = {}
+        self.goals: dict[str, set[int]] = {}  # 到達を処理済みの目標再生数
         if records is not None and not records.empty:
             for row in records.itertuples(index=False):
                 self._remember(row.kind, row.video_id, row.timestamp, row.milestone)
@@ -135,6 +142,12 @@ class NotificationLedger:
                 self.last_surge[video_id] = ts
         elif kind == "milestone" and milestone is not None and not pd.isna(milestone):
             self.milestones.setdefault(video_id, set()).add(int(milestone))
+        elif kind == "goal" and milestone is not None and not pd.isna(milestone):
+            self.goals.setdefault(video_id, set()).add(int(milestone))
+
+    def goal_done(self, video_id: str, goal: int) -> bool:
+        """この目標（またはそれ以上の目標）の到達をすでに処理したか。"""
+        return any(done >= goal for done in self.goals.get(video_id, set()))
 
     def remember(self, alert: Alert) -> None:
         self._remember(alert.kind, alert.video_id, alert.timestamp, alert.milestone)
@@ -176,6 +189,22 @@ def evaluate_milestone(series: pd.DataFrame, video: VideoConfig,
         return None
     return Alert("milestone", video.video_id, video.display_name(), series["timestamp"].iloc[-1],
                  cur, milestone=milestone)
+
+
+def evaluate_goal(series: pd.DataFrame, video: VideoConfig, ledger: NotificationLedger) -> Alert | None:
+    """前回の取得から今回までの間に目標再生数に到達したら返す（同じ目標は 1 回だけ）。
+
+    監視を始めた時点ですでに超えていた目標では反応しない（いきなり再生しないため）。
+    1 回で複数の目標を飛び越えたときは、いちばん大きい目標の 1 回だけにする。
+    """
+    if not video.goals or len(series) < 2:
+        return None
+    prev, cur = int(series["view_count"].iloc[-2]), int(series["view_count"].iloc[-1])
+    crossed = [g for g in video.goals if prev < g <= cur and not ledger.goal_done(video.video_id, g)]
+    if not crossed:
+        return None
+    return Alert("goal", video.video_id, video.display_name(), series["timestamp"].iloc[-1], cur,
+                 milestone=max(crossed))
 
 
 def plan_messages(alerts: list[Alert], max_per_cycle: int, dashboard_url: str = "") -> list[Message]:
@@ -230,8 +259,11 @@ class MonitorService:
         clock: Callable[[], datetime] = utc_now,
         sleep: Callable[[float], None] = time.sleep,
         config_loader: Callable[[Path], AppConfig] | None = None,
+        player: Callable[[str], bool] = play_video,
     ) -> None:
         self.config = config
+        self.player = player  # 目標到達時に動画を開く関数（テストでは差し替える）
+        self._goal_warned: set[tuple[str, int]] = set()
         self.paths = DataPaths(config.data_dir)
         self.client = client or YouTubeClient(config.api_key)
         self._client_injected = client is not None
@@ -368,36 +400,71 @@ class MonitorService:
             ["video_id", "timestamp"]).reset_index(drop=True)
 
     def _evaluate(self, videos: list[VideoConfig], fetch: FetchResult) -> list[Alert]:
-        if not self.config.notification.enabled:
-            return []
         fetched_ts = pd.Timestamp(fetch.fetched_at).tz_convert("UTC")
+        notify = self.config.notification.enabled
         alerts: list[Alert] = []
         for video in videos:
             series = analytics.video_series(self.history, video.video_id)
             # 今回取得できなかった動画は、古いデータで判定しない
             if series.empty or series["timestamp"].iloc[-1] != fetched_ts:
                 continue
-            for alert in (
-                evaluate_milestone(series, video, self.ledger),
-                evaluate_surge(series, video, self.ledger, interval_seconds=self.config.interval_seconds),
-            ):
-                if alert is not None:
-                    alerts.append(alert)
+            # 目標再生数は、通知をオフにしていても判定する（再生は動画ごとの goal_play で決める）
+            candidates = [evaluate_goal(series, video, self.ledger)]
+            if notify:
+                candidates += [
+                    evaluate_milestone(series, video, self.ledger),
+                    evaluate_surge(series, video, self.ledger, interval_seconds=self.config.interval_seconds),
+                ]
+            alerts += [a for a in candidates if a is not None]
+            self._warn_passed_goals(video, series, alerts)
         return alerts
+
+    def _warn_passed_goals(self, video: VideoConfig, series: pd.DataFrame, alerts: list[Alert]) -> None:
+        """監視を始める前にすでに超えていた目標は再生しないことを、1 回だけ知らせる。"""
+        current = int(series["view_count"].iloc[-1])
+        just_reached = {a.milestone for a in alerts if a.kind == "goal" and a.video_id == video.video_id}
+        for goal in video.goals:
+            key = (video.video_id, goal)
+            if goal > current or key in self._goal_warned or goal in just_reached:
+                continue
+            self._goal_warned.add(key)
+            if not self.ledger.goal_done(video.video_id, goal):
+                logger.warning("%s の目標 %s回 は、すでに超えています（現在 %s回）。この目標では再生しません",
+                               video.display_name(), f"{goal:,}", f"{current:,}")
 
     def _deliver(self, alerts: list[Alert]) -> None:
         if not alerts:
             return
-        messages = plan_messages(alerts, self.config.notification.max_per_cycle,
-                                 self.config.dashboard.url)
-        delivered = True
-        for message in messages:
-            delivered = self.notifier.send(message) and delivered
-        text = messages[0].title if len(messages) == 1 else ""
         records = []
+        regular = [a for a in alerts if a.kind != "goal"]
+        if regular:
+            messages = plan_messages(regular, self.config.notification.max_per_cycle,
+                                     self.config.dashboard.url)
+            delivered = True
+            for message in messages:
+                delivered = self.notifier.send(message) and delivered
+            text = messages[0].title if len(messages) == 1 else ""
+            for alert in regular:
+                records.append(alert.record(delivered, text or alert.message().title))
+        played_urls: set[str] = set()
+        for alert in (a for a in alerts if a.kind == "goal"):
+            # 目標達成はまとめずに 1 件ずつ知らせ、動画を再生する
+            shown = False
+            if self.config.notification.enabled:
+                shown = self.notifier.send(alert.message(self.config.dashboard.url))
+            played = False
+            video = self.config.video(alert.video_id)
+            if video is not None and video.goal_play:
+                url = video.goal_url()
+                if url not in played_urls:  # 同じ動画を同時に何枚も開かない
+                    played = self.player(url)
+                    played_urls.add(url)
+                    logger.info("🎯 %s が目標 %s回 に到達しました。%s", alert.name, f"{alert.milestone:,}",
+                                f"{url} を再生します" if played else "動画を開けませんでした")
+            note = "（動画を再生しました）" if played else ""
+            records.append(alert.record(shown or played, alert.message().title + note))
         for alert in alerts:
             self.ledger.remember(alert)
-            records.append(alert.record(delivered, text or alert.message().title))
         self.notification_store.append(records)
 
     def _update_catalog(self, fetch: FetchResult) -> None:
@@ -594,5 +661,9 @@ def summarize_targets(config: AppConfig) -> Iterable[str]:
         rule = v.rule
         extra = "" if v.notify else "（通知なし・記録のみ）"
         milestone = f"、{rule.milestone_step:,}回ごとの節目" if rule.milestone_step else ""
+        goal = ""
+        if v.goals:
+            action = "で通知して動画を再生" if v.goal_play else "で通知"
+            goal = f"、目標 {'・'.join(f'{g:,}' for g in v.goals)}回{action}"
         yield (f"- {v.display_name()}（{v.video_id}）: 直近{_minutes_label(rule.window_minutes)}で"
-               f"{rule.threshold:,}回以上{milestone}で通知、クールダウン{rule.cooldown_minutes}分{extra}")
+               f"{rule.threshold:,}回以上{milestone}で通知、クールダウン{rule.cooldown_minutes}分{extra}{goal}")

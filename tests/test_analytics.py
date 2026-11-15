@@ -200,3 +200,12 @@ def test_gap_and_decrease_tables_keep_timezone():
     s = series([0, 5, 60, 65], [10, 20, 15, 30])
     assert str(A.find_gaps(s, 300)["gap_start"].dtype) == "datetime64[ns, UTC]"
     assert str(A.find_decreases(s)["timestamp"].dtype) == "datetime64[ns, UTC]"
+
+
+def test_goal_helpers():
+    assert A.next_goal(150, [100, 200, 300]) == 200
+    assert A.next_goal(300, [100, 200, 300]) is None
+    assert A.time_to_goal(1000, 1600, 300.0) == pd.Timedelta(hours=2)
+    assert A.time_to_goal(2000, 1600, 300.0) == pd.Timedelta(0)
+    assert A.time_to_goal(1000, 1600, 0.0) is None
+    assert A.time_to_goal(1000, 1600, None) is None

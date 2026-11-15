@@ -5,6 +5,7 @@
     python main.py --check         設定と API キーを確認する（API を 1 回だけ使う）
     python main.py --once          1 回だけ取得して終了する（タスク スケジューラー用）
     python main.py --test-notify   Windows 通知が表示されるか試す
+    python main.py --test-play     目標到達時の動画の再生を試す（ブラウザで開く）
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from config import AppConfig, ConfigError, ensure_config_file, load_config, reso
 from data_manager import DataFormatError
 from instance_lock import AlreadyRunningError, InstanceLock
 from monitor import APP_VERSION, MonitorService, summarize_targets
-from notifier import Message, create_notifier
+from notifier import Message, create_notifier, play_video
 from youtube_api import AuthError, QuotaExceededError, YouTubeAPIError, YouTubeClient, describe_auth_error
 
 logger = logging.getLogger("ytmonitor")
@@ -75,6 +76,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     mode.add_argument("--check", action="store_true", help="設定と API キーを確認して終了する")
     mode.add_argument("--once", action="store_true", help="1 回だけ取得して終了する")
     mode.add_argument("--test-notify", action="store_true", help="テスト通知を表示して終了する")
+    mode.add_argument("--test-play", action="store_true",
+                      help="目標到達時に再生する動画をブラウザで開いて終了する（API は使わない）")
     parser.add_argument("--verbose", action="store_true", help="詳しいログを表示する")
     parser.add_argument("--version", action="version", version=f"YouTube View Monitor {APP_VERSION}")
     return parser.parse_args(argv)
@@ -154,10 +157,41 @@ def run_check(config: AppConfig) -> int:
         else:
             views = f"{s.view_count:,}回" if s.view_count is not None else "視聴回数非公開"
             print(f"  OK {v.display_name()}: {views}  「{s.title}」 / {s.channel_title}")
+            if v.goals and s.view_count is not None:
+                for line in describe_goals(v, s.view_count):
+                    print(f"       {line}")
     for w in config.warnings:
         print(f"  注意: {w}")
     print("\n確認が終わりました。監視を始めるには python main.py を実行してください。")
     return 0 if not result.missing else 1
+
+
+def describe_goals(video, current: int) -> list[str]:
+    """目標再生数ごとに、あと何回か・すでに超えているかを返す（--check の表示用）。"""
+    lines = []
+    for goal in video.goals:
+        if goal > current:
+            action = f"到達したら {video.goal_url()} を再生" if video.goal_play else "到達したら通知"
+            lines.append(f"🎯 目標 {goal:,}回まで あと {goal - current:,}回（{action}）")
+        else:
+            lines.append(f"🎯 目標 {goal:,}回 はすでに超えています（この目標では再生しません）")
+    return lines
+
+
+def run_test_play(config: AppConfig) -> int:
+    """目標到達時と同じ方法で動画を開き、ブラウザで再生されるかを確かめる。"""
+    targets = [v for v in config.active_videos if v.goals] or list(config.active_videos)
+    if not targets:
+        print("config.json の videos に動画がありません。")
+        return 1
+    video = targets[0]
+    url = video.goal_url()
+    print(f"{video.display_name()} の目標到達時に再生する動画を開きます: {url}")
+    if play_video(url):
+        print("ブラウザで開きました。音声付きで自動再生されない場合は README の「目標到達時に動画が自動再生されないとき」を見てください。")
+        return 0
+    print("ブラウザで開けませんでした。既定のブラウザが設定されているか確認してください。")
+    return 1
 
 
 def run_test_notify(config: AppConfig) -> int:
@@ -180,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
     configure_console()
     args = parse_args(argv)
     path = resolve_config_path(args.config)
-    config = load_or_explain(path, require_api_key=not args.test_notify,
+    config = load_or_explain(path, require_api_key=not (args.test_notify or args.test_play),
                              require_videos=not args.test_notify)
     if config is None:
         return 1
@@ -192,6 +226,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_check(config)
     if args.test_notify:
         return run_test_notify(config)
+    if args.test_play:
+        return run_test_play(config)
 
     lock = InstanceLock(config.data_dir / "monitor.lock")
     try:

@@ -88,3 +88,22 @@ def test_missing_powershell_is_handled(monkeypatch):
     toast = N.WindowsToastNotifier("App")
     toast._registered = True
     assert toast.send(N.Message(title="T", body="B")) is False
+
+
+def test_play_video_opens_only_youtube_watch_urls(monkeypatch):
+    opened = []
+    monkeypatch.setattr("webbrowser.open", lambda url, new=0: opened.append((url, new)) or True)
+    assert N.play_video("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+    assert opened == [("https://www.youtube.com/watch?v=dQw4w9WgXcQ", 2)]
+    for bad in ["https://evil.example.com/", "file:///C:/Windows/System32/cmd.exe",
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=1", "", "C:\\x.exe"]:
+        assert N.play_video(bad) is False
+    assert len(opened) == 1
+
+
+def test_play_video_handles_browser_errors(monkeypatch):
+    def boom(url, new=0):
+        raise RuntimeError("no browser")
+
+    monkeypatch.setattr("webbrowser.open", boom)
+    assert N.play_video("https://www.youtube.com/watch?v=dQw4w9WgXcQ") is False
