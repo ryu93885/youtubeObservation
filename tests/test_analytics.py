@@ -185,3 +185,18 @@ def test_resolve_points_matches_brute_force():
         expected = candidates.min()  # 同じ距離なら過去側
         assert got["sample_time"].iloc[i] == expected
         assert got["view_count"].iloc[i] == s.loc[s["timestamp"] == expected, "view_count"].iloc[0]
+
+
+@pytest.mark.parametrize("n", [1, 2, 3, 6])
+def test_rolling_increase_before_one_hour_of_data(n):
+    """取得開始から 1 時間未満（基準が 1 件も見つからない）でもエラーにならず、NaN を返すこと。"""
+    r = A.rolling_increase(regular(n), H, interval=300)
+    assert len(r) == n
+    assert r["increase"].isna().all() and r["per_hour"].isna().all()
+    assert str(r["base_time"].dtype) == "datetime64[ns, UTC]"
+
+
+def test_gap_and_decrease_tables_keep_timezone():
+    s = series([0, 5, 60, 65], [10, 20, 15, 30])
+    assert str(A.find_gaps(s, 300)["gap_start"].dtype) == "datetime64[ns, UTC]"
+    assert str(A.find_decreases(s)["timestamp"].dtype) == "datetime64[ns, UTC]"

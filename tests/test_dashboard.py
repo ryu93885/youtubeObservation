@@ -100,3 +100,22 @@ def test_exported_demo_files_open_with_data_dir(monkeypatch, tmp_path):
     write_demo_files(tmp_path / "demo")
     at = run_app(monkeypatch, "--data-dir", str(tmp_path / "demo"), "--config", str(tmp_path / "none.json"))
     assert "現在の視聴回数" in labels(at)
+
+
+@pytest.mark.parametrize("samples", [1, 2, 3])
+def test_dashboard_right_after_monitoring_starts(monkeypatch, tmp_path, samples):
+    """監視を始めた直後（1 時間分のデータがない）でもダッシュボードが表示できること。"""
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({"api_key": FAKE_KEY, "videos": [{"url": VID_A, "name": "推し"}]},
+                                   ensure_ascii=False), encoding="utf-8")
+    clock = Clock(datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=5 * samples))
+    svc = M.MonitorService(load_config(cfg_path), client=FakeClient(clock, {VID_A: 1000}, step={VID_A: 7}),
+                           notifier=RecordingNotifier(), clock=clock, sleep=lambda s: None)
+    svc.startup()
+    for _ in range(samples):
+        svc.run_cycle()
+        clock.advance(minutes=5)
+    at = run_app(monkeypatch, "--config", str(cfg_path))
+    values = {m.label: m.value for m in at.metric}
+    assert values["過去1時間の増加数"] == "データ不足"
+    assert any("1時間分のデータがそろうと表示されます" in i.value for i in at.info)

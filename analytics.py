@@ -240,7 +240,9 @@ def rolling_increase(series: pd.DataFrame, window: pd.Timedelta = pd.Timedelta(h
                                      "span_minutes", "per_hour"])
     pts = resolve_points(series, series["timestamp"] - window, tol)
     out = series[["timestamp", "view_count"]].reset_index(drop=True).copy()
-    out["base_time"] = pts["sample_time"].to_numpy()
+    # to_numpy() にするとタイムゾーンの情報が落ち、基準が 1 件も見つからない（取得開始から
+    # 1 時間未満）ときに比較でエラーになる。Series のまま行番号で合わせて代入する
+    out["base_time"] = pts["sample_time"].set_axis(out.index)
     valid = out["base_time"].notna() & (out["base_time"] < out["timestamp"])
     out["increase"] = (out["view_count"] - pts["view_count"]).where(valid)
     span = (out["timestamp"] - out["base_time"]).dt.total_seconds() / 60
@@ -369,10 +371,10 @@ def find_gaps(series: pd.DataFrame, expected_interval: pd.Timedelta | float) -> 
     diffs = ts.diff()
     mask = diffs > limit
     return pd.DataFrame({
-        "gap_start": ts.shift(1)[mask].to_numpy(),
-        "gap_end": ts[mask].to_numpy(),
-        "duration": diffs[mask].to_numpy(),
-    }).reset_index(drop=True)
+        "gap_start": ts.shift(1)[mask].reset_index(drop=True),
+        "gap_end": ts[mask].reset_index(drop=True),
+        "duration": diffs[mask].reset_index(drop=True),
+    })
 
 
 def find_decreases(series: pd.DataFrame) -> pd.DataFrame:
@@ -383,10 +385,10 @@ def find_decreases(series: pd.DataFrame) -> pd.DataFrame:
     prev = s["view_count"].shift(1)
     mask = s["view_count"] < prev
     return pd.DataFrame({
-        "timestamp": s.loc[mask, "timestamp"].to_numpy(),
-        "previous": prev[mask].astype("int64").to_numpy(),
-        "current": s.loc[mask, "view_count"].to_numpy(),
-        "change": (s.loc[mask, "view_count"] - prev[mask]).astype("int64").to_numpy(),
+        "timestamp": s.loc[mask, "timestamp"].reset_index(drop=True),
+        "previous": prev[mask].astype("int64").reset_index(drop=True),
+        "current": s.loc[mask, "view_count"].reset_index(drop=True),
+        "change": (s.loc[mask, "view_count"] - prev[mask]).astype("int64").reset_index(drop=True),
     })
 
 
