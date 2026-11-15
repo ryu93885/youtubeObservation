@@ -1,0 +1,18 @@
+# Streamlit の設定（streamlit run dashboard.py をこのフォルダーで実行したときに使われる）
+
+[server]
+# 自分の PC からだけ開けるようにする（同じネットワークの他の機器からは見えない）
+address = "localhost"
+port = 8501
+# 初回起動時に端末でメールアドレスを聞かれないようにする
+showEmailPrompt = false
+runOnSave = false
+
+[browser]
+# 利用状況の統計を Streamlit 社に送らない
+gatherUsageStats = false
+serverAddress = "localhost"
+
+[client]
+# 右上の「Deploy」ボタンなど、開発者向けのメニューを隠す
+toolbarMode = "viewer"

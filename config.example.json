@@ -1,0 +1,34 @@
+{
+  "api_key": "",
+  "interval_seconds": 300,
+  "timezone": "Asia/Tokyo",
+  "retention_days": 30,
+
+  "notification": {
+    "enabled": true,
+    "window_minutes": 60,
+    "threshold": 1000,
+    "cooldown_minutes": 60,
+    "milestone_step": 0,
+    "max_per_cycle": 3,
+    "sound": true
+  },
+
+  "dashboard": {
+    "refresh_seconds": 60,
+    "default_period_hours": 24
+  },
+
+  "videos": [
+    {
+      "url": "https://www.youtube.com/watch?v=XXXXXXXXXXX",
+      "name": "推しの新曲MV"
+    },
+    {
+      "url": "https://youtu.be/YYYYYYYYYYY",
+      "name": "ライブ配信のアーカイブ",
+      "threshold": 500,
+      "milestone_step": 100000
+    }
+  ]
+}

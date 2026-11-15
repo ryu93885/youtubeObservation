@@ -1,0 +1,8 @@
+# YouTube View Monitor の実行に必要なパッケージ
+#   pip install -r requirements.txt
+requests>=2.31
+pandas>=2.2
+streamlit>=1.55
+plotly>=5.24
+# Windows にはタイムゾーンのデータベースがないため必要（Asia/Tokyo などを使う）
+tzdata>=2024.1

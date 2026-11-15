@@ -1,0 +1,4 @@
+# テストを実行するときに必要なパッケージ
+#   pip install -r requirements-dev.txt
+-r requirements.txt
+pytest>=7.4

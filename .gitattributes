@@ -1,0 +1,5 @@
+# Windows のバッチファイルは CRLF で保存する（LF だと cmd.exe が誤動作することがある）
+*.bat text eol=crlf
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf

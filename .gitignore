@@ -1,0 +1,25 @@
+# API キーを含む設定ファイル（ひな形の config.example.json だけをコミットする）
+config.json
+.env
+
+# 実行時に作られるデータ・ログ
+/data/
+/logs/
+*.tmp
+
+# Streamlit の秘密情報
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# OS / エディター
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
